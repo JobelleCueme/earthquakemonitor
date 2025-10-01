@@ -7,5 +7,5 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['lucide-react'],
   },
-  base: '/earthquake/', // <--- add this line with your repo name
+  base: '/earthquakemonitor/', // <--- add this line with your repo name
 });
