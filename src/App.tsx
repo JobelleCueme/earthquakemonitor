@@ -219,7 +219,7 @@ function App() {
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-2">
                 <h2 className="text-lg sm:text-xl font-semibold text-slate-100">Recent Events</h2>
                 <span className="px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full text-xs sm:text-sm text-blue-400 font-medium">
-                  {filteredEarthquakes.length} events
+                  {filteredEarthquakes.length} events1
                 </span>
               </div>
 
