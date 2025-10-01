@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { AlertCircle, Waves, RefreshCw, MapPin } from 'lucide-react';
 import { Earthquake } from './types/earthquake';
-import { fetchEarthquakes } from './services/earthquakeService';
+
+import { fetchEarthquakes } from './services/earthquakeService'; // ✅ use unified fetcher
 import { EarthquakeMap } from './components/EarthquakeMap';
 import { EarthquakeCard } from './components/EarthquakeCard';
 import { SearchBar } from './components/SearchBar';
 import { FilterControls } from './components/FilterControls';
+import "leaflet/dist/leaflet.css";
 
 const AUTO_REFRESH_INTERVAL = 60000;
 
@@ -15,19 +17,33 @@ function App() {
   const [selectedEarthquake, setSelectedEarthquake] = useState<Earthquake | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // filters
   const [minMagnitude, setMinMagnitude] = useState(0);
-  const [timeframe, setTimeframe] = useState('week');
+  const [timeframe, setTimeframe] = useState<'hour' | 'day' | 'week' | 'month'>('week');
+  const [apiSource, setApiSource] = useState<'usgs' | 'emsc' | 'iris' | 'geonet'>('usgs');
+
+  // location & refresh
   const [searchCoordinates, setSearchCoordinates] = useState<{ lat: number; lng: number } | null>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
 
+  // --- FETCH HANDLER ---
   const loadEarthquakes = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await fetchEarthquakes(timeframe);
-      setEarthquakes(data.features);
+
+      const data = await fetchEarthquakes(apiSource, timeframe, minMagnitude);
+
+      // normalize response (all services should return geojson-like with `features`)
+      if (data.features) {
+        setEarthquakes(data.features);
+      } else {
+        setEarthquakes([]);
+      }
+
       setLastUpdate(new Date());
     } catch (err) {
       setError('Failed to load earthquake data. Please try again.');
@@ -35,8 +51,9 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [timeframe]);
+  }, [timeframe, apiSource, minMagnitude]);
 
+  // --- USER LOCATION ---
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -50,31 +67,76 @@ function App() {
         },
         (error) => {
           console.error('Error getting location:', error);
-        }
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     }
   }, []);
 
+
+  // --- INITIAL LOAD ---
   useEffect(() => {
     loadEarthquakes();
   }, [loadEarthquakes]);
 
+  // --- AUTO REFRESH ---
   useEffect(() => {
     if (!autoRefreshEnabled) return;
-
     const interval = setInterval(() => {
       loadEarthquakes();
     }, AUTO_REFRESH_INTERVAL);
-
     return () => clearInterval(interval);
   }, [autoRefreshEnabled, loadEarthquakes]);
 
+  // --- FILTER EARTHQUAKES ---
   useEffect(() => {
     const filtered = earthquakes.filter(
-      quake => quake.properties.mag >= minMagnitude
+      quake => quake.properties?.mag >= minMagnitude
     );
     setFilteredEarthquakes(filtered);
   }, [earthquakes, minMagnitude]);
+
+  // --- ALERT HANDLER ---
+  const alertForNearbyEarthquakes = useCallback(() => {
+    if (!searchCoordinates) return;
+
+    filteredEarthquakes.forEach(quake => {
+      const quakeLat = quake.geometry.coordinates[1];
+      const quakeLng = quake.geometry.coordinates[0];
+      const distance = getDistance(searchCoordinates.lat, searchCoordinates.lng, quakeLat, quakeLng);
+
+      // Alert if within 100 km and above minMagnitude
+      if (quake.properties.mag >= minMagnitude && distance <= 100) {
+        // Browser alert
+        alert(`Earthquake detected nearby! Magnitude: ${quake.properties.mag}, Location: ${quake.properties.place}`);
+
+        // Play sound alert (add alert.mp3 in public folder)
+        const audio = new Audio('/alert.mp3');
+        audio.play();
+      }
+    });
+  }, [filteredEarthquakes, searchCoordinates, minMagnitude]);
+
+  // --- HELPER FUNCTION: distance in km ---
+  function getDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371; // Earth radius km
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) *
+      Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  // --- TRIGGER ALERT ON FILTERED EARTHQUAKES UPDATE ---
+  useEffect(() => {
+    if (filteredEarthquakes.length > 0) {
+      alertForNearbyEarthquakes();
+    }
+  }, [filteredEarthquakes, alertForNearbyEarthquakes]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100">
@@ -109,11 +171,10 @@ function App() {
 
               <button
                 onClick={() => setAutoRefreshEnabled(!autoRefreshEnabled)}
-                className={`flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg transition-colors ${
-                  autoRefreshEnabled
+                className={`flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg transition-colors ${autoRefreshEnabled
                     ? 'bg-green-500/10 hover:bg-green-500/20 text-green-400 border-green-500/30'
                     : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
-                }`}
+                  }`}
                 title={autoRefreshEnabled ? 'Auto-refresh enabled' : 'Auto-refresh disabled'}
               >
                 <div className={`w-2 h-2 rounded-full ${autoRefreshEnabled ? 'bg-green-400 animate-pulse' : 'bg-slate-500'}`} />
@@ -133,6 +194,7 @@ function App() {
 
           <div className="space-y-4">
             <SearchBar onSearch={setSearchCoordinates} />
+
             <div className="flex items-center justify-between gap-4">
               <FilterControls
                 minMagnitude={minMagnitude}
@@ -140,6 +202,19 @@ function App() {
                 timeframe={timeframe}
                 onTimeframeChange={setTimeframe}
               />
+
+              {/* API Selector */}
+              <select
+                value={apiSource}
+                onChange={(e) => setApiSource(e.target.value as any)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm"
+              >
+                <option value="usgs">USGS (Global)</option>
+                <option value="emsc">EMSC (Europe/Global)</option>
+                <option value="iris">IRIS (Research Data)</option>
+                <option value="geonet">GeoNet (New Zealand)</option>
+              </select>
+
               {lastUpdate && (
                 <div className="text-xs text-slate-500 whitespace-nowrap">
                   Last updated: {lastUpdate.toLocaleTimeString()}
